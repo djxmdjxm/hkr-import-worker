@@ -1,0 +1,5 @@
+xmlschema
+sqlalchemy
+psycopg2-binary
+bullmq
+watchdog

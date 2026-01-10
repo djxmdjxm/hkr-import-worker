@@ -1,0 +1,20 @@
+import enum
+
+class RegisterType(enum.Enum):
+    Schleswig_Holstein = "01"
+    Hamburg = "02"
+    Niedersachsen = "03"
+    Bremen = "04"
+    Nordrhein_Westfalen = "05"
+    Hessen = "06"
+    Rheinland_Pfalz = "07"
+    Baden_Wuerttemberg = "08"
+    Bayern = "09"
+    Saarland = "10"
+    Berlin = "11"
+    Brandenburg = "12"
+    Mecklenburg_Vorpommern = "13"
+    Sachsen = "14"
+    Sachsen_Anhalt = "15"
+    Thueringen = "16"
+    Berlin_Brandenburg = "17"
