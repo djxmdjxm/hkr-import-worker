@@ -5,8 +5,9 @@
 import xml.etree.ElementTree as ET
 import xmlschema
 
+import os
+
 from common.logging import getLogger
-from common.utils import base64_to_file
 from krebs_db import (
     Session,
     PatientReport,
@@ -27,17 +28,26 @@ from krebs_db import (
     TumorFollowUp
 )
 
-XSD_PATH = 'schemas/oBDS_v3.0.0.8a_RKI_Schema.xsd'
+# XSD schema used to validate incoming XML files before import.
+# Version 3.0.4_RKI was provided by the HKR (Hamburgisches Krebsregister) in April 2024,
+# replacing the previous 3.0.0.8a_RKI schema.
+# Key changes in 3.0.4_RKI vs 3.0.0.8a_RKI:
+#   - New fields: Sentinel_LK_untersucht, Sentinel_LK_befallen (sentinel lymph node data)
+#   - Renamed: Anzahl_Tage_ST_Dauer -> Anzahl_Tage_Bestrahlung_Dauer
+#   - Renamed: Anzahl_Tage_Diagnose_ST -> Anzahl_Tage_Diagnose_Bestrahlung
+#   - ICD version list replaced by regex pattern (future-proof for new yearly editions)
+XSD_PATH = 'schemas/oBDS_v3.0.4_RKI_Schema.xsd'
 
 
-def execute(uid: str, file: str):
+def execute(uid: str, file_path: str):
+    # file_path: path to the XML file on the shared Docker volume /data/uploads/
     logger = getLogger(f'rki_report_processor.{uid}')
     logger.info('executing report import...')
 
-    # return
-
-    xml_file = base64_to_file(file)
-    logger.info('loaded file from base64')
+    # Open the XML file directly from disk — no base64 decoding needed
+    with open(file_path, 'rb') as f:
+        xml_file = f.read()
+    logger.info(f'loaded file from {file_path}')
 
     schema = xmlschema.XMLSchema(XSD_PATH)
     logger.info(f'loaded schema:{XSD_PATH}')
@@ -165,6 +175,12 @@ def execute(uid: str, file: str):
                 )
                 tumor_report.melanoma = melanoma
 
+            # cTNM = clinical TNM staging (before therapy, based on imaging/examination).
+            # pTNM = pathological TNM staging (after surgery, based on tissue specimen).
+            # Both are optional in the schema — a tumor may have one, both, or neither.
+            # BUG FIX (HKR 2024): the original code crashed when pTNM existed without cTNM,
+            # because it assumed cTNM was always present. Both blocks are now fully independent
+            # and each guarded by 'if ... is not None' before accessing any fields.
             cTNM_raw = tumor_report_raw['Primaerdiagnose'].get('cTNM')
             if cTNM_raw is not None:
                 cTNM = TNM(
@@ -191,9 +207,9 @@ def execute(uid: str, file: str):
             if pTNM_raw is not None:
                 pTNM = TNM(
                     version    = pTNM_raw.get('Version'),
-                    y_symbol   = cTNM_raw.get('y_Symbol') == 'y',
-                    r_symbol   = cTNM_raw.get('r_Symbol') == 'r',
-                    a_symbol   = cTNM_raw.get('a_Symbol') == 'a',
+                    y_symbol   = pTNM_raw.get('y_Symbol') == 'y',
+                    r_symbol   = pTNM_raw.get('r_Symbol') == 'r',
+                    a_symbol   = pTNM_raw.get('a_Symbol') == 'a',
                     t_prefix   = pTNM_raw.get('c_p_u_Praefix_T'),
                     t          = pTNM_raw.get('T'),
                     m_symbol   = pTNM_raw.get('m_Symbol'),
@@ -345,9 +361,9 @@ def execute(uid: str, file: str):
                 if tnm_raw is not None:
                     tnm = TNM(
                         version    = tnm_raw.get('Version'),
-                        y_symbol   = cTNM_raw.get('y_Symbol') == 'y',
-                        r_symbol   = cTNM_raw.get('r_Symbol') == 'r',
-                        a_symbol   = cTNM_raw.get('a_Symbol') == 'a',
+                        y_symbol   = tnm_raw.get('y_Symbol') == 'y',
+                        r_symbol   = tnm_raw.get('r_Symbol') == 'r',
+                        a_symbol   = tnm_raw.get('a_Symbol') == 'a',
                         t_prefix   = tnm_raw.get('c_p_u_Praefix_T'),
                         t          = tnm_raw.get('T'),
                         m_symbol   = tnm_raw.get('m_Symbol'),
@@ -373,4 +389,11 @@ def execute(uid: str, file: str):
         logger.info(f'imported patient with id:{patient_report.patient_id}')
 
     session.close()
+
+    # Delete the XML file from the shared volume after successful import
+    try:
+        os.remove(file_path)
+        logger.info(f'deleted upload file {file_path}')
+    except OSError as e:
+        logger.warning(f'could not delete upload file {file_path}: {e}')
 

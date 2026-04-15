@@ -60,7 +60,12 @@ async def process_report_import(uid: str):
         
         try:
             match report_import.type:
-                case ReportType.XML_oBDS_3_0_0_8a_RKI:
+                case ReportType.XML_oBDS_3_0_4_RKI:
+                    # Delegate processing to the RKI-specific processor.
+                    # report_import.file is a filesystem path on the shared Docker volume
+                    # /data/uploads/ — NOT base64 content in the database.
+                    # (The original implementation stored base64 in a VARCHAR column,
+                    # which caused Gunicorn worker timeouts for files >5 MB.)
                     rki_report_processor.execute(report_import.uid, report_import.file)
                 case _:
                     logger.warning(f'report import with uid:{report_import.uid} and type:{report_import.type} is not supported')
