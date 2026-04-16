@@ -28,6 +28,47 @@ from krebs_db import (
     TumorFollowUp
 )
 
+# --- F9: Strukturierte XSD-Fehlermeldungen ---
+# Eigene Exception-Klasse damit main.py XSD-Fehler von anderen Fehlern unterscheiden kann.
+# info_dict enthaelt: error_type, category, hint, technical_message, path
+class XsdValidationError(Exception):
+    def __init__(self, info_dict: dict):
+        self.info_dict = info_dict
+        super().__init__(info_dict.get("technical_message", "XSD validation error"))
+
+
+def _categorize_xsd_error(reason: str, path: str) -> dict:
+    # Kategorisiert einen XSD-Validierungsfehler regelbasiert (kein KI).
+    # Gibt ein dict mit category und hint zurueck.
+    r = reason.lower()
+    # Reihenfolge beachten: spezifischere Checks zuerst
+    if "not expected" in r or "not allowed" in r:
+        cat  = "wrong_schema_version"
+        hint = "Bitte pruefen Sie, ob die richtige Schema-Version (z. B. 3.0.4) im Dropdown ausgewaehlt ist."
+    elif "not facet-valid" in r or "enumeration" in r or "value must be one of" in r:
+        cat  = "invalid_code_value"
+        hint = "Ein Codierwert in der Datei ist ungueltig. Bitte pruefen Sie die betroffene Stelle in der Quelldatei."
+    elif "not complete" in r or "missing" in r:
+        cat  = "missing_required_field"
+        hint = "Ein Pflichtfeld fehlt in der Datei. Bitte pruefen Sie die Vollstaendigkeit des Meldebogens."
+    elif "pattern-valid" in r or "pattern" in r:
+        cat  = "wrong_format"
+        hint = "Ein Feld hat das falsche Format (z. B. Datum). Erwartet wird meist JJJJ-MM-TT."
+    elif "namespace" in r:
+        cat  = "wrong_namespace"
+        hint = "Die Datei scheint kein gueltiger oBDS-Meldebogen zu sein. Bitte pruefen Sie die Dateiherkunft."
+    else:
+        cat  = "unknown"
+        hint = "Die Datei enthaelt einen unbekannten Fehler. Bitte wenden Sie sich an Ihre IT-Stelle."
+    return {
+        "error_type":        "xsd_validation",
+        "category":          cat,
+        "technical_message": reason,
+        "path":              path,
+        "hint":              hint,
+    }
+
+
 # XSD schema used to validate incoming XML files before import.
 # Version 3.0.4_RKI was provided by the HKR (Hamburgisches Krebsregister) in April 2024,
 # replacing the previous 3.0.0.8a_RKI schema.
@@ -57,9 +98,16 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
     xsd_path = XSD_MAP.get(report_type, XSD_MAP['XML:oBDS_3.0.4_RKI'])
     schema = xmlschema.XMLSchema(xsd_path)
     logger.info(f'loaded schema:{xsd_path} for report_type:{report_type}')
-    if not schema.is_valid(xml_file):
-        errors = schema.validate(xml_file)
-        raise ValueError(f'XML does not conform to schema: {errors}')
+    # iter_errors() liefert alle XMLSchemaValidationError-Objekte.
+    # Wir nehmen nur den ersten Fehler - aussagekraeftig genug fuer den Use Case.
+    xsd_errors = list(schema.iter_errors(xml_file))
+    if xsd_errors:
+        first = xsd_errors[0]
+        info_dict = _categorize_xsd_error(
+            reason=first.reason or str(first),
+            path=str(first.path) if first.path else "",
+        )
+        raise XsdValidationError(info_dict)
 
     logger.info(f'schema verified successfully')
     

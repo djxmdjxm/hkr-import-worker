@@ -16,6 +16,7 @@ from main_db.enums.report_import_status import ReportImportStatus
 from main_db.enums.report_type import ReportType
 
 from processor import rki_report_processor
+from processor.rki_report_processor import XsdValidationError
 
 logger = getLogger(f'import_worker')
 
@@ -70,6 +71,18 @@ async def process_report_import(uid: str):
                     )
                 case _:
                     logger.warning(f'report import with uid:{report_import.uid} and type:{report_import.type} is not supported')
+        except XsdValidationError as e:
+            # XSD-Validierungsfehler: strukturierter Fehlertext in additional_info speichern
+            logger.error(
+                "XSD validation failed",
+                extra={
+                    "category":          e.info_dict["category"],
+                    "path":              e.info_dict["path"],
+                    "technical_message": e.info_dict["technical_message"],
+                }
+            )
+            report_import.additional_info = e.info_dict
+            report_import.status = ReportImportStatus.Failure
         except Exception as e:
             logger.error(e)
             report_import.status = ReportImportStatus.Failure
