@@ -42,7 +42,7 @@ def _categorize_xsd_error(reason: str, path: str) -> dict:
     # Gibt ein dict mit category und hint zurueck.
     r = reason.lower()
     # Reihenfolge beachten: spezifischere Checks zuerst
-    if "not expected" in r or "not allowed" in r:
+    if "not expected" in r or "not allowed" in r or "unexpected" in r:
         cat  = "wrong_schema_version"
         hint = "Bitte pruefen Sie, ob die richtige Schema-Version (z. B. 3.0.4) im Dropdown ausgewaehlt ist."
     elif "not facet-valid" in r or "enumeration" in r or "value must be one of" in r:
