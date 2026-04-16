@@ -36,10 +36,15 @@ from krebs_db import (
 #   - Renamed: Anzahl_Tage_ST_Dauer -> Anzahl_Tage_Bestrahlung_Dauer
 #   - Renamed: Anzahl_Tage_Diagnose_ST -> Anzahl_Tage_Diagnose_Bestrahlung
 #   - ICD version list replaced by regex pattern (future-proof for new yearly editions)
-XSD_PATH = 'schemas/oBDS_v3.0.4_RKI_Schema.xsd'
+# Map: ReportType -> XSD-Datei
+# Neue Schema-Version hinzufuegen = XSD nach schemas/ kopieren + Eintrag hier erganzen
+XSD_MAP = {
+    'XML:oBDS_3.0.0.8a_RKI': 'schemas/oBDS_v3.0.0.8a_RKI_Schema.xsd',
+    'XML:oBDS_3.0.4_RKI':    'schemas/oBDS_v3.0.4_RKI_Schema.xsd',
+}
 
 
-def execute(uid: str, file_path: str):
+def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
     # file_path: path to the XML file on the shared Docker volume /data/uploads/
     logger = getLogger(f'rki_report_processor.{uid}')
     logger.info('executing report import...')
@@ -49,8 +54,9 @@ def execute(uid: str, file_path: str):
         xml_file = f.read()
     logger.info(f'loaded file from {file_path}')
 
-    schema = xmlschema.XMLSchema(XSD_PATH)
-    logger.info(f'loaded schema:{XSD_PATH}')
+    xsd_path = XSD_MAP.get(report_type, XSD_MAP['XML:oBDS_3.0.4_RKI'])
+    schema = xmlschema.XMLSchema(xsd_path)
+    logger.info(f'loaded schema:{xsd_path} for report_type:{report_type}')
     if not schema.is_valid(xml_file):
         errors = schema.validate(xml_file)
         raise ValueError(f'XML does not conform to schema: {errors}')
