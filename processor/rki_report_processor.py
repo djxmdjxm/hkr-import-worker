@@ -41,8 +41,15 @@ def _categorize_xsd_error(reason: str, path: str) -> dict:
     # Kategorisiert einen XSD-Validierungsfehler regelbasiert (kein KI).
     # Gibt ein dict mit category und hint zurueck.
     r = reason.lower()
+    p = path.lower()
     # Reihenfolge beachten: spezifischere Checks zuerst
-    if "not expected" in r or "not allowed" in r or "unexpected" in r:
+    # F11: Schema_Version-Mismatch schlägt als Enumeration-Fehler an (reason enthält "enumeration"),
+    # wird aber fälschlich als invalid_code_value klassifiziert. Path-Check hat Vorrang.
+    if "schema_version" in p:
+        cat  = "wrong_schema_version"
+        hint = ("Die Schema-Version der Datei stimmt nicht mit der ausgewaehlten Version "
+                "ueberein. Bitte waehlen Sie im Dropdown die passende Schema-Version aus.")
+    elif "not expected" in r or "not allowed" in r or "unexpected" in r:
         cat  = "wrong_schema_version"
         hint = "Bitte pruefen Sie, ob die richtige Schema-Version (z. B. 3.0.4) im Dropdown ausgewaehlt ist."
     elif "not facet-valid" in r or "enumeration" in r or "value must be one of" in r:
