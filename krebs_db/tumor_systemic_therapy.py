@@ -23,7 +23,7 @@ class TumorSystemicTherapy(ReprMixin, Base):
   start_date_accuracy = Column(db_enum(DateAccuracyType), nullable=True, comment='SYST:Datum_Beginn_SYST:Datumsgenauigkeit')
   duration_days = Column(Integer, nullable=True, comment='SYST:Anzahl_Tage_SYST_Dauer')
   intent = Column(db_enum(SystemicTherapyIntentType), nullable=False, comment='SYST:Intention')
-  surgery_relation = Column(db_enum(SurgeryRelationType), nullable=False, comment='SYST:Stellung_OP')
+  surgery_relation = Column(db_enum(SurgeryRelationType), nullable=True, comment='SYST:Stellung_OP')
   type = Column(db_enum(SystemicTherapyType), nullable=False, comment='SYST:Therapieart')
   protocol = Column(JSON, nullable=True, comment='SYST:Protokoll') # { name: string } | { code: string; version: string; }
   drugs = Column(JSON, nullable=False, comment='SYST:Menge_Substanz:Substanz') # [{ name: string; } | { code: string; version: string; }, ...]

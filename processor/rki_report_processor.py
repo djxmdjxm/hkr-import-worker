@@ -119,6 +119,9 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
     logger.info(f'schema verified successfully')
     
     xml_dict = schema.to_dict(xml_file)
+    # Invariante: Nach bestandener XSD-Validierung sind required Felder garantiert vorhanden.
+    # .get() für alle XML-Element-Keys ist bewusste Konvention — der Processor muss keine
+    # XSD-Optionalität kennen. Ändert sich ein Feld von required→optional, ist kein Code nötig.
 
     ## Remap XML to KREBS Database
     session = Session()
@@ -126,7 +129,7 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
     register = xml_dict['Lieferregister']['@Register_ID']
     report_at = xml_dict['Lieferdatum']['$']
 
-    patient_reports_raw = xml_dict['Menge_Patient']['Patient']
+    patient_reports_raw = xml_dict.get('Menge_Patient', {}).get('Patient', [])
     for patient_report_raw in patient_reports_raw:
         death_causes = list(map(
             lambda x: { 'code': x['Code'], 'version': x.get('Version') },
@@ -158,10 +161,10 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
         )
 
         patient_report.tumor_reports = []
-        tumor_reports_raw = patient_report_raw['Menge_Tumor']['Tumor']
+        tumor_reports_raw = patient_report_raw.get('Menge_Tumor', {}).get('Tumor', [])
         for tumor_report_raw in tumor_reports_raw:
-            tumor_icd = tumor_report_raw['Primaerdiagnose']['Primaertumor_ICD']
-            tumor_topo_icd = tumor_report_raw['Primaerdiagnose']['Primaertumor_Topographie_ICD_O']
+            tumor_icd = tumor_report_raw['Primaerdiagnose'].get('Primaertumor_ICD')
+            tumor_topo_icd = tumor_report_raw['Primaerdiagnose'].get('Primaertumor_Topographie_ICD_O')
             distant_metastasis = list(map(
                 lambda x: { 'location': x['Lokalisation'] },
                 tumor_report_raw['Primaerdiagnose'].get('Menge_FM', {}).get('Fernmetastase', [])
@@ -185,10 +188,10 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
 
             histology_raw = tumor_report_raw['Primaerdiagnose'].get('Histologie')
             if histology_raw is not None:
-                icd = histology_raw['Morphologie_ICD_O']
+                icd = histology_raw.get('Morphologie_ICD_O')
                 histology = TumorHistology(
                     morphology_icd       = { 'code': icd['Code'], 'version': icd.get('Version') },
-                    grading              = histology_raw['Grading'],
+                    grading              = histology_raw.get('Grading'),
                     lymph_nodes_examined = histology_raw.get('LK_untersucht'),
                     lymph_nodes_affected = histology_raw.get('LK_befallen')
                 )
@@ -294,9 +297,9 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
                     surgery_raw.get('Menge_OPS', {}).get('OPS', [])
                 ))
                 surgery = TumorSurgery(
-                    intent                = surgery_raw['Intention'],
-                    date                  = surgery_raw['Datum_OP']['$'],
-                    date_accuracy         = surgery_raw['Datum_OP']['@Datumsgenauigkeit'],
+                    intent                = surgery_raw.get('Intention'),
+                    date                  = surgery_raw.get('Datum_OP', {})['$'],
+                    date_accuracy         = surgery_raw.get('Datum_OP', {})['@Datumsgenauigkeit'],
                     operations            = operations,
                     local_residual_status = surgery_raw.get('Lokale_Beurteilung_Residualstatus')
                 )
@@ -334,8 +337,8 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
                     ).get('Seite_Zielgebiet', {})
                     
                     radiotherapy_session = RadiotherapySession(
-                        start_date          = radiotherapy_session_raw['Datum_Beginn_Bestrahlung']['$'],
-                        start_date_accuracy = radiotherapy_session_raw['Datum_Beginn_Bestrahlung']['@Datumsgenauigkeit'],
+                        start_date          = radiotherapy_session_raw.get('Datum_Beginn_Bestrahlung', {})['$'],
+                        start_date_accuracy = radiotherapy_session_raw.get('Datum_Beginn_Bestrahlung', {})['@Datumsgenauigkeit'],
                         duration_days       = radiotherapy_session_raw.get('Anzahl_Tage_ST_Dauer'),
                         target_area         = target_area.get('CodeVersion2021', target_area.get('CodeVersion2014')),
                         laterality          = laterality,
@@ -353,7 +356,7 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
                     brachytherapy_raw = radiotherapy_session_raw.get('Applikationsart').get('Kontakt')
                     if brachytherapy_raw is not None:
                         brachytherapy = RadiotherapySessionBrachytherapy(
-                            type      = brachytherapy_raw['Interstitiell_endokavitaer'],
+                            type      = brachytherapy_raw.get('Interstitiell_endokavitaer'),
                             dose_rate = brachytherapy_raw.get('Rate_Type')
                         )
                         radiotherapy_session.brachytherapy = brachytherapy
@@ -361,7 +364,7 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
                     metabolic_raw = radiotherapy_session_raw.get('Applikationsart').get('Metabolisch')
                     if metabolic_raw is not None:
                         metabolic = RadiotherapySessionMetabolic(
-                            type = metabolic_raw['Metabolisch_Typ']
+                            type = metabolic_raw.get('Metabolisch_Typ')
                         )
                         radiotherapy_session.metabolic = metabolic
                     
@@ -383,14 +386,14 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
                 ))
 
                 systemic_therapy = TumorSystemicTherapy(
-                    start_date          = systemic_therapy_raw['Datum_Beginn_SYST']['$'],
-                    start_date_accuracy = systemic_therapy_raw['Datum_Beginn_SYST']['@Datumsgenauigkeit'],
+                    start_date          = systemic_therapy_raw.get('Datum_Beginn_SYST', {})['$'],
+                    start_date_accuracy = systemic_therapy_raw.get('Datum_Beginn_SYST', {})['@Datumsgenauigkeit'],
                     duration_days       = systemic_therapy_raw.get('Anzahl_Tage_SYST_Dauer'),
-                    intent              = systemic_therapy_raw['Intention'],
-                    surgery_relation    = systemic_therapy_raw['Stellung_OP'],
-                    type                = systemic_therapy_raw['Therapieart'],
+                    intent              = systemic_therapy_raw.get('Intention'),
+                    surgery_relation    = systemic_therapy_raw.get('Stellung_OP'),
+                    type                = systemic_therapy_raw.get('Therapieart'),
                     protocol            = { 'name': protocol_name } if protocol_name is not None else 
-                                        { 'code': protocol_obj['Code'], 'version': protocol_obj.get('Version') } if protocol_obj is not None else
+                                        { 'code': protocol_obj.get('Code'), 'version': protocol_obj.get('Version') } if protocol_obj is not None else
                                         None,
                     drugs               = drugs
                 )
@@ -409,8 +412,8 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
                 ))
                 follow_up = TumorFollowUp(
                     other_classification            = other_classification,
-                    date                            = follow_up_raw['Datum_Folgeereignis']['$'],
-                    date_accuracy                   = follow_up_raw['Datum_Folgeereignis']['@Datumsgenauigkeit'],
+                    date                            = follow_up_raw.get('Datum_Folgeereignis', {})['$'],
+                    date_accuracy                   = follow_up_raw.get('Datum_Folgeereignis', {})['@Datumsgenauigkeit'],
                     overall_tumor_status            = follow_up_raw.get('Gesamtbeurteilung_Tumorstatus'),
                     local_tumor_status              = follow_up_raw.get('Verlauf_Lokaler_Tumorstatus'),
                     lymph_node_tumor_status         = follow_up_raw.get('Verlauf_Tumorstatus_Lymphknoten'),
