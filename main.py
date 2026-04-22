@@ -59,20 +59,18 @@ async def process_report_import(uid: str):
         
         report_import.status = ReportImportStatus.Pending
         
+        warnings = []
         try:
             match report_import.type:
                 case ReportType.XML_oBDS_3_0_4_RKI | ReportType.XML_oBDS_3_0_0_8a_RKI:
-                    # Delegate to processor — pass report_type.value so the processor
-                    # can select the correct XSD from XSD_MAP.
-                    rki_report_processor.execute(
+                    warnings = rki_report_processor.execute(
                         report_import.uid,
                         report_import.file,
                         report_type=report_import.type.value
-                    )
+                    ) or []
                 case _:
                     logger.warning(f'report import with uid:{report_import.uid} and type:{report_import.type} is not supported')
         except XsdValidationError as e:
-            # XSD-Validierungsfehler: strukturierter Fehlertext in additional_info speichern
             logger.error(
                 "XSD validation failed",
                 extra={
@@ -87,7 +85,15 @@ async def process_report_import(uid: str):
             logger.error(e)
             report_import.status = ReportImportStatus.Failure
         else:
-            report_import.status = ReportImportStatus.Success
+            if warnings:
+                report_import.additional_info = {
+                    "warning_count": len(warnings),
+                    "warnings":      warnings,
+                }
+                report_import.status = ReportImportStatus.SuccessWithWarnings
+                logger.info(f'import succeeded with {len(warnings)} warnings')
+            else:
+                report_import.status = ReportImportStatus.Success
         finally:
             session.commit()
         

@@ -37,6 +37,11 @@ class XsdValidationError(Exception):
         super().__init__(info_dict.get("technical_message", "XSD validation error"))
 
 
+# Fehler-Kategorien die einen Import hart abbrechen (strukturelle Fehler).
+# Alles andere sind weiche Warnungen: Import laeuft durch, Abweichung wird gemeldet.
+_HARD_CATEGORIES = {"wrong_schema_version", "wrong_namespace", "missing_required_field"}
+
+
 def _categorize_xsd_error(reason: str, path: str) -> dict:
     # Kategorisiert einen XSD-Validierungsfehler regelbasiert (kein KI).
     # Gibt ein dict mit category und hint zurueck.
@@ -109,17 +114,35 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
     # iter_errors() liefert alle XMLSchemaValidationError-Objekte.
     # Wir nehmen nur den ersten Fehler - aussagekraeftig genug fuer den Use Case.
     xsd_errors = list(schema.iter_errors(xml_file))
+    warnings = []
     if xsd_errors:
-        first = xsd_errors[0]
-        info_dict = _categorize_xsd_error(
-            reason=first.reason or str(first),
-            path=str(first.path) if first.path else "",
-        )
-        raise XsdValidationError(info_dict)
+        categorized = [
+            _categorize_xsd_error(
+                reason=e.reason or str(e),
+                path=str(e.path) if e.path else "",
+            )
+            for e in xsd_errors
+        ]
+        hard = [c for c in categorized if c["category"] in _HARD_CATEGORIES]
+        if hard:
+            raise XsdValidationError(hard[0])
 
-    logger.info(f'schema verified successfully')
-    
-    xml_dict = schema.to_dict(xml_file)
+        # Nur weiche Fehler: Import laeuft durch, Abweichungen werden als Warnungen gemeldet.
+        for err, cat in zip(xsd_errors, categorized):
+            invalid_val = getattr(err, 'value', None)
+            msg = (f"Ungültiger Wert: '{invalid_val}'"
+                   if invalid_val is not None
+                   else cat["technical_message"][:200])
+            warnings.append({
+                "path":     str(err.path) if err.path else "",
+                "category": cat["category"],
+                "message":  msg,
+            })
+        logger.info(f'{len(warnings)} weiche Validierungswarnungen — Import wird fortgesetzt')
+
+    logger.info('schema verified successfully')
+
+    xml_dict = schema.to_dict(xml_file, validation='lax')
     # Invariante: Nach bestandener XSD-Validierung sind required Felder garantiert vorhanden.
     # .get() für alle XML-Element-Keys ist bewusste Konvention — der Processor muss keine
     # XSD-Optionalität kennen. Ändert sich ein Feld von required→optional, ist kein Code nötig.
@@ -461,4 +484,6 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
         logger.info(f'deleted upload file {file_path}')
     except OSError as e:
         logger.warning(f'could not delete upload file {file_path}: {e}')
+
+    return warnings
 
