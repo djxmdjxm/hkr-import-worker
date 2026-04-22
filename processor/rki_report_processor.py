@@ -184,7 +184,8 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
 
     logger.info('schema verified successfully')
 
-    xml_dict = schema.to_dict(xml_file, validation='lax')
+    # to_dict mit validation='lax' gibt (data, errors) zurueck — nur data verwenden.
+    xml_dict, _ = schema.to_dict(xml_file, validation='lax')
     # Invariante: Nach bestandener XSD-Validierung sind required Felder garantiert vorhanden.
     # .get() für alle XML-Element-Keys ist bewusste Konvention — der Processor muss keine
     # XSD-Optionalität kennen. Ändert sich ein Feld von required→optional, ist kein Code nötig.
