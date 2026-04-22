@@ -514,10 +514,22 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
 
             patient_report.tumor_reports.append(tumor_report)
 
-        session.add(patient_report)
-        session.commit()
-
-        logger.info(f'imported patient with id:{patient_report.patient_id}')
+        patient_id_val = patient_report_raw.get('@Patient_ID', '–')
+        try:
+            session.add(patient_report)
+            session.commit()
+            logger.info(f'imported patient with id:{patient_report.patient_id}')
+        except Exception as db_err:
+            session.rollback()
+            logger.warning(f'patient {patient_id_val} skipped due to DB error: {db_err}')
+            warnings.append({
+                "patient_id": patient_id_val,
+                "tumor_id":   "–",
+                "feld":       "Datenbankfehler",
+                "wert":       "–",
+                "kategorie":  "db_constraint",
+                "hinweis":    f"Datensatz konnte nicht gespeichert werden — möglicherweise ungültige Feldwerte: {str(db_err)[:150]}",
+            })
 
     session.close()
 
