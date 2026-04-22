@@ -47,11 +47,12 @@ def _categorize_xsd_error(reason: str, path: str) -> dict:
     # wird aber fälschlich als invalid_code_value klassifiziert. Path-Check hat Vorrang.
     if "schema_version" in p:
         cat  = "wrong_schema_version"
-        hint = ("Die Schema-Version der Datei stimmt nicht mit der ausgewaehlten Version "
-                "ueberein. Bitte waehlen Sie im Dropdown die passende Schema-Version aus.")
+        hint = ("Die Schema-Version in der XML-Datei wird nicht erkannt. "
+                "Unterstuetzt werden: 3.0.4_RKI und 3.0.0.8a_RKI.")
     elif "not expected" in r or "not allowed" in r or "unexpected" in r:
         cat  = "wrong_schema_version"
-        hint = "Bitte pruefen Sie, ob die richtige Schema-Version (z. B. 3.0.4) im Dropdown ausgewaehlt ist."
+        hint = ("Unbekannte Felder in der XML gefunden. Bitte pruefen Sie, ob die Datei "
+                "dem oBDS 3.0.4_RKI oder 3.0.0.8a_RKI Standard entspricht.")
     elif "not facet-valid" in r or "enumeration" in r or "value must be one of" in r:
         cat  = "invalid_code_value"
         hint = "Ein Codierwert in der Datei ist ungueltig. Bitte pruefen Sie die betroffene Stelle in der Quelldatei."
