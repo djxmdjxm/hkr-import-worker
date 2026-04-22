@@ -2,6 +2,7 @@
 # Copyright (c) 2025 Nataliya Didukh, Ihor Zhvanko.
 # See the LICENSE file in the project root for full license text.
 
+import re
 import xml.etree.ElementTree as ET
 import xmlschema
 
@@ -37,9 +38,49 @@ class XsdValidationError(Exception):
         super().__init__(info_dict.get("technical_message", "XSD validation error"))
 
 
-# Fehler-Kategorien die einen Import hart abbrechen (strukturelle Fehler).
-# Alles andere sind weiche Warnungen: Import laeuft durch, Abweichung wird gemeldet.
-_HARD_CATEGORIES = {"wrong_schema_version", "wrong_namespace", "missing_required_field"}
+_NS = 'http://www.basisdatensatz.de/oBDS/XML'
+
+# Nur strukturelle Fehler brechen den Import hart ab.
+# missing_required_field ist bewusst weich: leere optionale Bloecke (cTNM, pTNM)
+# koennen XSD-Vollstaendigkeitsfehler erzeugen, sind aber importierbar.
+_HARD_CATEGORIES = {"wrong_schema_version", "wrong_namespace"}
+
+
+def _build_id_map(xml_bytes: bytes) -> dict:
+    """Map (patient_0idx, tumor_0idx) -> (patient_id, tumor_id) fuer Fehleranreicherung."""
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError:
+        return {}
+    ns = {'ns': _NS}
+    id_map: dict = {}
+    patients = root.findall('./ns:Menge_Patient/ns:Patient', ns)
+    for p_idx, patient in enumerate(patients):
+        pid = patient.get('Patient_ID', '–')
+        tumors = patient.findall('./ns:Menge_Tumor/ns:Tumor', ns)
+        id_map[(p_idx, -1)] = (pid, '–')
+        for t_idx, tumor in enumerate(tumors):
+            tid = tumor.get('Tumor_ID', '–')
+            id_map[(p_idx, t_idx)] = (pid, tid)
+    return id_map
+
+
+def _extract_positions(path: str) -> tuple:
+    """0-basierte (patient_idx, tumor_idx) aus XPath-String (1-basierte XPath-Indizes)."""
+    pm = re.search(r'Patient(?:\[(\d+)\])?', path)
+    tm = re.search(r'Tumor(?:\[(\d+)\])?', path)
+    p = (int(pm.group(1)) - 1 if pm.group(1) else 0) if pm else -1
+    t = (int(tm.group(1)) - 1 if tm.group(1) else 0) if tm else -1
+    return (p, t)
+
+
+def _extract_field_name(path: str) -> str:
+    """Lesbarer Feldname aus XPath (ohne Namespace-Prefixe und Strukturknoten)."""
+    clean = re.sub(r'\{[^}]+\}', '', path)
+    parts = [re.sub(r'\[\d+\]', '', p) for p in clean.split('/') if p]
+    skip = {'oBDS_RKI', 'Menge_Patient', 'Patient', 'Menge_Tumor', 'Tumor'}
+    parts = [p for p in parts if p not in skip]
+    return '/'.join(parts[-2:]) if len(parts) >= 2 else (parts[-1] if parts else path)
 
 
 def _categorize_xsd_error(reason: str, path: str) -> dict:
@@ -128,15 +169,20 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
             raise XsdValidationError(hard[0])
 
         # Nur weiche Fehler: Import laeuft durch, Abweichungen werden als Warnungen gemeldet.
+        # id_map: (patient_0idx, tumor_0idx) -> (patient_id, tumor_id)
+        id_map = _build_id_map(xml_file)
         for err, cat in zip(xsd_errors, categorized):
+            path      = str(err.path) if err.path else ""
+            p_idx, t_idx = _extract_positions(path)
+            patient_id, tumor_id = id_map.get((p_idx, t_idx), id_map.get((p_idx, -1), ('–', '–')))
             invalid_val = getattr(err, 'value', None)
-            msg = (f"Ungültiger Wert: '{invalid_val}'"
-                   if invalid_val is not None
-                   else cat["technical_message"][:200])
             warnings.append({
-                "path":     str(err.path) if err.path else "",
-                "category": cat["category"],
-                "message":  msg,
+                "patient_id": patient_id,
+                "tumor_id":   tumor_id,
+                "feld":       _extract_field_name(path),
+                "wert":       str(invalid_val) if invalid_val is not None else "–",
+                "kategorie":  cat["category"],
+                "hinweis":    cat["hint"],
             })
         logger.info(f'{len(warnings)} weiche Validierungswarnungen — Import wird fortgesetzt')
 
