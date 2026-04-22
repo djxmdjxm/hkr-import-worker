@@ -540,5 +540,19 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
     except OSError as e:
         logger.warning(f'could not delete upload file {file_path}: {e}')
 
+    # Cap warnings to avoid excessive DB payload (store first 500, note total)
+    MAX_WARNINGS = 500
+    total_warnings = len(warnings)
+    if total_warnings > MAX_WARNINGS:
+        warnings = warnings[:MAX_WARNINGS]
+        warnings.append({
+            "patient_id": "–",
+            "tumor_id":   "–",
+            "feld":       "Bericht gekuerzt",
+            "wert":       "–",
+            "kategorie":  "info",
+            "hinweis":    f"Der Bericht zeigt die ersten {MAX_WARNINGS} von {total_warnings} Qualitaetsproblemen. Bitte pruefen Sie die Quelldatei umfassend.",
+        })
+
     return warnings
 
