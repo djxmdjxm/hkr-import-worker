@@ -186,9 +186,14 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
 
     # to_dict mit validation='lax' gibt (data, errors) zurueck — nur data verwenden.
     xml_dict, _ = schema.to_dict(xml_file, validation='lax')
-    # Invariante: Nach bestandener XSD-Validierung sind required Felder garantiert vorhanden.
-    # .get() für alle XML-Element-Keys ist bewusste Konvention — der Processor muss keine
-    # XSD-Optionalität kennen. Ändert sich ein Feld von required→optional, ist kein Code nötig.
+
+    # Hilfsfunktionen für xmltodict-Eigenheiten:
+    # _d: leere XML-Elemente (<Foo/>) liefern None statt {} — .get('key', {}) gibt dann
+    #     trotzdem None zurück (Schlüssel existiert). _d normalisiert auf {}.
+    # _l: Einzelne Kindelemente liefern dict statt [dict] — for-Schleifen würden über
+    #     String-Keys iterieren. _l erzwingt immer eine Liste.
+    def _d(v): return v if isinstance(v, dict) else {}
+    def _l(v): return v if isinstance(v, list) else ([v] if v is not None else [])
 
     ## Remap XML to KREBS Database
     session = Session()
@@ -196,17 +201,16 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
     register = xml_dict['Lieferregister']['@Register_ID']
     report_at = xml_dict['Lieferdatum']['$']
 
-    patient_reports_raw = xml_dict.get('Menge_Patient', {}).get('Patient', [])
+    patient_reports_raw = _l(xml_dict.get('Menge_Patient', {}).get('Patient'))
     for patient_report_raw in patient_reports_raw:
+        vitalstatus = patient_report_raw['Patienten_Stammdaten']['Vitalstatus']
+        todesursachen = _d(vitalstatus.get('Todesursachen'))
         death_causes = list(map(
             lambda x: { 'code': x['Code'], 'version': x.get('Version') },
-            patient_report_raw['Patienten_Stammdaten']['Vitalstatus']
-                .get('Todesursachen', {})
-                .get('Menge_Weitere_Todesursachen', {})
-                .get('Todesursache_ICD', [])
-        )) 
-        
-        underlying_death_cause = patient_report_raw['Patienten_Stammdaten']['Vitalstatus'].get('Todesursachen', {}).get('Grundleiden')
+            _l(_d(todesursachen.get('Menge_Weitere_Todesursachen')).get('Todesursache_ICD'))
+        ))
+
+        underlying_death_cause = todesursachen.get('Grundleiden')
         if underlying_death_cause is not None:
             death_causes += [{
                 'code': underlying_death_cause['Code'],
@@ -214,57 +218,59 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
                 'is_underlying': True
             }]
 
+        datum_vitalstatus = _d(vitalstatus.get('Datum_Vitalstatus'))
         patient_report = PatientReport(
             patient_id                 = patient_report_raw['@Patient_ID'],
             gender                     = patient_report_raw['Patienten_Stammdaten']['Geschlecht'],
-            date_of_birth              = patient_report_raw['Patienten_Stammdaten']['Geburtsdatum']['$'],
-            date_of_birth_accuracy     = patient_report_raw['Patienten_Stammdaten']['Geburtsdatum']['@Datumsgenauigkeit'],
-            is_deceased                = patient_report_raw['Patienten_Stammdaten']['Vitalstatus']['Verstorben'] == 'J',
-            vital_status_date          = patient_report_raw['Patienten_Stammdaten'].get('Vitalstatus', {}).get('Datum_Vitalstatus', {}).get('$'),
-            vital_status_date_accuracy = patient_report_raw['Patienten_Stammdaten'].get('Vitalstatus', {}).get('Datum_Vitalstatus', {}).get('@Datumsgenauigkeit'),
+            date_of_birth              = _d(patient_report_raw['Patienten_Stammdaten'].get('Geburtsdatum')).get('$'),
+            date_of_birth_accuracy     = _d(patient_report_raw['Patienten_Stammdaten'].get('Geburtsdatum')).get('@Datumsgenauigkeit'),
+            is_deceased                = vitalstatus.get('Verstorben') == 'J',
+            vital_status_date          = datum_vitalstatus.get('$'),
+            vital_status_date_accuracy = datum_vitalstatus.get('@Datumsgenauigkeit'),
             death_causes               = death_causes,
             register                   = register,
             reported_at                = report_at
         )
 
         patient_report.tumor_reports = []
-        tumor_reports_raw = patient_report_raw.get('Menge_Tumor', {}).get('Tumor', [])
+        tumor_reports_raw = _l(_d(patient_report_raw.get('Menge_Tumor')).get('Tumor'))
         for tumor_report_raw in tumor_reports_raw:
-            tumor_icd = tumor_report_raw['Primaerdiagnose'].get('Primaertumor_ICD')
-            tumor_topo_icd = tumor_report_raw['Primaerdiagnose'].get('Primaertumor_Topographie_ICD_O')
+            prim = tumor_report_raw['Primaerdiagnose']
+            tumor_icd = prim.get('Primaertumor_ICD')
+            tumor_topo_icd = prim.get('Primaertumor_Topographie_ICD_O')
             distant_metastasis = list(map(
                 lambda x: { 'location': x['Lokalisation'] },
-                tumor_report_raw['Primaerdiagnose'].get('Menge_FM', {}).get('Fernmetastase', [])
+                _l(_d(prim.get('Menge_FM')).get('Fernmetastase'))
             ))
             other_classification = list(map(
                 lambda x: { 'name': x['Name'], 'stadium': x['Stadium'] },
-                tumor_report_raw['Primaerdiagnose'].get('Menge_Weitere_Klassifikation', {}).get('Weitere_Klassifikation', [])
+                _l(_d(prim.get('Menge_Weitere_Klassifikation')).get('Weitere_Klassifikation'))
             ))
             tumor_report = TumorReport(
                 tumor_id                = tumor_report_raw['@Tumor_ID'],
-                diagnosis_date          = tumor_report_raw['Primaerdiagnose']['Diagnosedatum']['$'],
-                diagnosis_date_accuracy = tumor_report_raw['Primaerdiagnose']['Diagnosedatum']['@Datumsgenauigkeit'],
-                incidence_location      = tumor_report_raw['Primaerdiagnose']['Inzidenzort'],
-                icd                     = {'code': tumor_icd['Code'], 'version': tumor_icd.get('Version')},
-                topographie             = {'code': tumor_topo_icd['Code'], 'version': tumor_topo_icd.get('Version')} if tumor_topo_icd is not None else None,
-                diagnostic_certainty    = tumor_report_raw['Primaerdiagnose']['Diagnosesicherung'],
+                diagnosis_date          = _d(prim.get('Diagnosedatum')).get('$'),
+                diagnosis_date_accuracy = _d(prim.get('Diagnosedatum')).get('@Datumsgenauigkeit'),
+                incidence_location      = prim.get('Inzidenzort'),
+                icd                     = {'code': tumor_icd['Code'], 'version': tumor_icd.get('Version')} if tumor_icd else None,
+                topographie             = {'code': tumor_topo_icd['Code'], 'version': tumor_topo_icd.get('Version')} if tumor_topo_icd else None,
+                diagnostic_certainty    = prim.get('Diagnosesicherung'),
                 distant_metastasis      = distant_metastasis if len(distant_metastasis) > 0 else None,
                 other_classification    = other_classification if len(other_classification) > 0 else None,
-                laterality              = tumor_report_raw['Primaerdiagnose']['Seitenlokalisation']
+                laterality              = prim.get('Seitenlokalisation')
             )
 
-            histology_raw = tumor_report_raw['Primaerdiagnose'].get('Histologie')
+            histology_raw = prim.get('Histologie')
             if histology_raw is not None:
-                icd = histology_raw.get('Morphologie_ICD_O')
+                morph_icd = histology_raw.get('Morphologie_ICD_O')
                 histology = TumorHistology(
-                    morphology_icd       = { 'code': icd['Code'], 'version': icd.get('Version') },
+                    morphology_icd       = {'code': morph_icd['Code'], 'version': morph_icd.get('Version')} if morph_icd else None,
                     grading              = histology_raw.get('Grading'),
                     lymph_nodes_examined = histology_raw.get('LK_untersucht'),
                     lymph_nodes_affected = histology_raw.get('LK_befallen')
                 )
                 tumor_report.histology = histology
 
-            breast_raw = tumor_report_raw['Primaerdiagnose'].get('Modul_Mamma')
+            breast_raw = prim.get('Modul_Mamma')
             if breast_raw is not None:
                 breast = TumorReportBreast(
                     menopause_status_at_diagnosis = breast_raw.get('Praetherapeutischer_Menopausenstatus'),
@@ -276,7 +282,7 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
                 )
                 tumor_report.breast = breast
 
-            colorectal_raw = tumor_report_raw['Primaerdiagnose'].get('Modul_Darm')
+            colorectal_raw = prim.get('Modul_Darm')
             if colorectal_raw is not None:
                 colorectal = TumorReportColorectal(
                     ras_mutation                         = colorectal_raw.get('RASMutation'),
@@ -284,25 +290,26 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
                 )
                 tumor_report.colorectal = colorectal
 
-            prostate_raw = tumor_report_raw['Primaerdiagnose'].get('Modul_Prostata')
+            prostate_raw = prim.get('Modul_Prostata')
             if prostate_raw is not None:
+                gleason = _d(prostate_raw.get('GleasonScore'))
                 prostate = TumorReportProstate(
-                    gleason_primary_grade   = prostate_raw.get('GleasonScore', {}).get('GradPrimaer'),
-                    gleason_secondary_grade = prostate_raw.get('GleasonScore', {}).get('GradSekundaer'),
-                    gleason_score_result    = prostate_raw.get('GleasonScore', {}).get('ScoreErgebnis'),
+                    gleason_primary_grade   = gleason.get('GradPrimaer'),
+                    gleason_secondary_grade = gleason.get('GradSekundaer'),
+                    gleason_score_result    = gleason.get('ScoreErgebnis'),
                     gleason_score_reason    = prostate_raw.get('AnlassGleasonScore'),
                     psa                     = prostate_raw.get('PSA'),
-                    psa_date                = prostate_raw.get('DatumPSA', {}).get('$'),
-                    psa_date_accuracy       = prostate_raw.get('DatumPSA', {}).get('Datumsgenauigkeit')
+                    psa_date                = _d(prostate_raw.get('DatumPSA')).get('$'),
+                    psa_date_accuracy       = _d(prostate_raw.get('DatumPSA')).get('Datumsgenauigkeit')
                 )
                 tumor_report.prostate = prostate
-            
-            melanoma_raw = tumor_report_raw['Primaerdiagnose'].get('Modul_Malignes_Melanom')
+
+            melanoma_raw = prim.get('Modul_Malignes_Melanom')
             if melanoma_raw is not None:
                 melanoma = TumorReportMelanoma(
                     tumor_thickness_mm = melanoma_raw.get('Tumordicke'),
                     ldh                = melanoma_raw.get('LDH'),
-                    ulceration         = melanoma_raw.get('Ulzeration').text == 'J'
+                    ulceration         = melanoma_raw.get('Ulzeration') == 'J'
                 )
                 tumor_report.melanoma = melanoma
 
@@ -357,23 +364,24 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
                 tumor_report.p_tnm = pTNM
 
             tumor_report.surgeries = []
-            surgeries_raw = tumor_report_raw.get('Menge_OP', {}).get('OP', [])
+            surgeries_raw = _l(_d(tumor_report_raw.get('Menge_OP')).get('OP'))
             for surgery_raw in surgeries_raw:
                 operations = list(map(
                     lambda x: { 'code': x['Code'], 'version': x['Version'] },
-                    surgery_raw.get('Menge_OPS', {}).get('OPS', [])
+                    _l(_d(surgery_raw.get('Menge_OPS')).get('OPS'))
                 ))
+                datum_op = _d(surgery_raw.get('Datum_OP'))
                 surgery = TumorSurgery(
                     intent                = surgery_raw.get('Intention'),
-                    date                  = surgery_raw.get('Datum_OP', {})['$'],
-                    date_accuracy         = surgery_raw.get('Datum_OP', {})['@Datumsgenauigkeit'],
+                    date                  = datum_op.get('$'),
+                    date_accuracy         = datum_op.get('@Datumsgenauigkeit'),
                     operations            = operations,
                     local_residual_status = surgery_raw.get('Lokale_Beurteilung_Residualstatus')
                 )
                 tumor_report.surgeries.append(surgery)
 
             tumor_report.radiotherapies = []
-            radiotherapies_raw = tumor_report_raw.get('Menge_ST', {}).get('ST', [])
+            radiotherapies_raw = _l(_d(tumor_report_raw.get('Menge_ST')).get('ST'))
             for radiotherapy_raw in radiotherapies_raw:
                 radiotherapy = TumorRadiotherapy(
                     intent           = radiotherapy_raw.get('Intention'),
@@ -381,37 +389,23 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
                 )
 
                 radiotherapy.sessions = []
-                radiotherapy_sessions_raw = radiotherapy_raw.get('Menge_Bestrahlung', {}).get('Bestrahlung', [])
+                radiotherapy_sessions_raw = _l(_d(radiotherapy_raw.get('Menge_Bestrahlung')).get('Bestrahlung'))
                 for radiotherapy_session_raw in radiotherapy_sessions_raw:
-                    application_type = radiotherapy_session_raw.get('Applikationsart', {})
-                    target_area = application_type.get('Perkutan',
-                        application_type.get('Kontakt',
-                            application_type.get('Metabolisch',
-                                application_type.get('Sonstige',
-                                    application_type.get('Unbekannt', {})
-                                )
-                            )
-                        ),
-                    ).get('Zielgebiet', {})
-                    laterality = application_type.get('Perkutan',
-                        application_type.get('Kontakt',
-                            application_type.get('Metabolisch',
-                                application_type.get('Sonstige',
-                                    application_type.get('Unbekannt', {})
-                                )
-                            )
-                        ),
-                    ).get('Seite_Zielgebiet', {})
-                    
+                    app = _d(radiotherapy_session_raw.get('Applikationsart'))
+                    app_inner = _d(app.get('Perkutan', app.get('Kontakt', app.get('Metabolisch', app.get('Sonstige', app.get('Unbekannt'))))))
+                    target_area = _d(app_inner.get('Zielgebiet'))
+                    laterality  = app_inner.get('Seite_Zielgebiet')
+
+                    datum_st = _d(radiotherapy_session_raw.get('Datum_Beginn_Bestrahlung'))
                     radiotherapy_session = RadiotherapySession(
-                        start_date          = radiotherapy_session_raw.get('Datum_Beginn_Bestrahlung', {})['$'],
-                        start_date_accuracy = radiotherapy_session_raw.get('Datum_Beginn_Bestrahlung', {})['@Datumsgenauigkeit'],
+                        start_date          = datum_st.get('$'),
+                        start_date_accuracy = datum_st.get('@Datumsgenauigkeit'),
                         duration_days       = radiotherapy_session_raw.get('Anzahl_Tage_ST_Dauer'),
                         target_area         = target_area.get('CodeVersion2021', target_area.get('CodeVersion2014')),
                         laterality          = laterality,
                     )
 
-                    percutaneous_raw = radiotherapy_session_raw.get('Applikationsart').get('Perkutan')
+                    percutaneous_raw = app.get('Perkutan')
                     if percutaneous_raw is not None:
                         percutaneous = RadiotherapySessionPercutaneous(
                             chemoradio        = percutaneous_raw.get('Radiochemo'),
@@ -420,67 +414,69 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
                         )
                         radiotherapy_session.percutaneous = percutaneous
 
-                    brachytherapy_raw = radiotherapy_session_raw.get('Applikationsart').get('Kontakt')
+                    brachytherapy_raw = app.get('Kontakt')
                     if brachytherapy_raw is not None:
                         brachytherapy = RadiotherapySessionBrachytherapy(
                             type      = brachytherapy_raw.get('Interstitiell_endokavitaer'),
                             dose_rate = brachytherapy_raw.get('Rate_Type')
                         )
                         radiotherapy_session.brachytherapy = brachytherapy
-                    
-                    metabolic_raw = radiotherapy_session_raw.get('Applikationsart').get('Metabolisch')
+
+                    metabolic_raw = app.get('Metabolisch')
                     if metabolic_raw is not None:
                         metabolic = RadiotherapySessionMetabolic(
                             type = metabolic_raw.get('Metabolisch_Typ')
                         )
                         radiotherapy_session.metabolic = metabolic
-                    
+
                     radiotherapy.sessions.append(radiotherapy_session)
 
                 tumor_report.radiotherapies.append(radiotherapy)
 
             tumor_report.systemic_therapies = []
-            systemic_therapies_raw = tumor_report_raw.get('Menge_SYST', {}).get('SYST', [])
+            systemic_therapies_raw = _l(_d(tumor_report_raw.get('Menge_SYST')).get('SYST'))
             for systemic_therapy_raw in systemic_therapies_raw:
-                protocol = systemic_therapy_raw.get('Protokoll', {})
+                protocol = _d(systemic_therapy_raw.get('Protokoll'))
                 protocol_name = protocol.get('Bezeichnung')
                 protocol_obj = protocol.get('Protokollschluessel')
                 drugs = list(map(
                     lambda x: { 'name': x['Bezeichnung'] } if x.get('Bezeichnung') is not None else
                             { 'code': x['ATC']['Code'], 'version': x['ATC'].get('Version') } if x.get('ATC') is not None else
                             None,
-                    systemic_therapy_raw.get('Menge_Substanz', {}).get('Substanz', [])
+                    _l(_d(systemic_therapy_raw.get('Menge_Substanz')).get('Substanz'))
                 ))
 
+                datum_syst = _d(systemic_therapy_raw.get('Datum_Beginn_SYST'))
                 systemic_therapy = TumorSystemicTherapy(
-                    start_date          = systemic_therapy_raw.get('Datum_Beginn_SYST', {})['$'],
-                    start_date_accuracy = systemic_therapy_raw.get('Datum_Beginn_SYST', {})['@Datumsgenauigkeit'],
+                    start_date          = datum_syst.get('$'),
+                    start_date_accuracy = datum_syst.get('@Datumsgenauigkeit'),
                     duration_days       = systemic_therapy_raw.get('Anzahl_Tage_SYST_Dauer'),
                     intent              = systemic_therapy_raw.get('Intention'),
                     surgery_relation    = systemic_therapy_raw.get('Stellung_OP'),
                     type                = systemic_therapy_raw.get('Therapieart'),
-                    protocol            = { 'name': protocol_name } if protocol_name is not None else 
+                    protocol            = { 'name': protocol_name } if protocol_name is not None else
                                         { 'code': protocol_obj.get('Code'), 'version': protocol_obj.get('Version') } if protocol_obj is not None else
                                         None,
                     drugs               = drugs
                 )
                 tumor_report.systemic_therapies.append(systemic_therapy)
-            
+
             tumor_report.follow_ups = []
-            follow_ups_raw = tumor_report_raw.get('Menge_Folgeereignis', {}).get('Folgeereignis', [])
+            follow_ups_raw = _l(_d(tumor_report_raw.get('Menge_Folgeereignis')).get('Folgeereignis'))
             for follow_up_raw in follow_ups_raw:
                 other_classification = list(map(
                     lambda x: { 'name': x['Name'], 'stadium': x['Stadium'] },
-                    follow_up_raw.get('Menge_Weitere_Klassifikation', {}).get('Weitere_Klassifikation', [])
+                    _l(_d(follow_up_raw.get('Menge_Weitere_Klassifikation')).get('Weitere_Klassifikation'))
                 ))
                 distant_metastasis = list(map(
                     lambda x: { 'location': x['Lokalisation'] },
-                    follow_up_raw.get('Menge_FM', {}).get('Fernmetastase', [])
+                    _l(_d(follow_up_raw.get('Menge_FM')).get('Fernmetastase'))
                 ))
+                datum_fu = _d(follow_up_raw.get('Datum_Folgeereignis'))
                 follow_up = TumorFollowUp(
                     other_classification            = other_classification,
-                    date                            = follow_up_raw.get('Datum_Folgeereignis', {})['$'],
-                    date_accuracy                   = follow_up_raw.get('Datum_Folgeereignis', {})['@Datumsgenauigkeit'],
+                    date                            = datum_fu.get('$'),
+                    date_accuracy                   = datum_fu.get('@Datumsgenauigkeit'),
                     overall_tumor_status            = follow_up_raw.get('Gesamtbeurteilung_Tumorstatus'),
                     local_tumor_status              = follow_up_raw.get('Verlauf_Lokaler_Tumorstatus'),
                     lymph_node_tumor_status         = follow_up_raw.get('Verlauf_Tumorstatus_Lymphknoten'),
