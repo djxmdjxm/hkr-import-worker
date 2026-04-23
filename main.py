@@ -82,7 +82,13 @@ async def process_report_import(uid: str):
             report_import.additional_info = e.info_dict
             report_import.status = ReportImportStatus.Failure
         except Exception as e:
-            logger.error(e)
+            err_msg = str(e)
+            logger.error(err_msg)
+            report_import.additional_info = {
+                "category":          "internal_error",
+                "hint":              "Technischer Fehler beim Import. Bitte prüfen Sie die Datei oder kontaktieren Sie den Administrator.",
+                "technical_message": err_msg[:500],
+            }
             report_import.status = ReportImportStatus.Failure
         else:
             if warnings:
