@@ -148,9 +148,9 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI', p
     xsd_path = XSD_MAP.get(report_type, XSD_MAP['XML:oBDS_3.0.4_RKI'])
     schema = xmlschema.XMLSchema(xsd_path)
     logger.info(f'loaded schema:{xsd_path} for report_type:{report_type}')
-    # iter_errors() liefert alle XMLSchemaValidationError-Objekte.
-    # Wir nehmen nur den ersten Fehler - aussagekraeftig genug fuer den Use Case.
-    xsd_errors = list(schema.iter_errors(xml_file))
+    # Einmaliger Durchlauf: Parsen und Validierung gleichzeitig — erheblich schneller
+    # als iter_errors() gefolgt von to_dict() in zwei getrennten Pässen.
+    xml_dict, xsd_errors = schema.to_dict(xml_file, validation='lax')
     warnings = []
     if xsd_errors:
         categorized = [
@@ -183,9 +183,6 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI', p
         logger.info(f'{len(warnings)} weiche Validierungswarnungen — Import wird fortgesetzt')
 
     logger.info('schema verified successfully')
-
-    # to_dict mit validation='lax' gibt (data, errors) zurueck — nur data verwenden.
-    xml_dict, _ = schema.to_dict(xml_file, validation='lax')
 
     # Hilfsfunktionen für xmltodict-Eigenheiten:
     # _d: leere XML-Elemente (<Foo/>) liefern None statt {} — .get('key', {}) gibt dann
