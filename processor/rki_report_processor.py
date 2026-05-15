@@ -135,7 +135,7 @@ XSD_MAP = {
 }
 
 
-def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
+def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI', progress_callback=None):
     # file_path: path to the XML file on the shared Docker volume /data/uploads/
     logger = getLogger(f'rki_report_processor.{uid}')
     logger.info('executing report import...')
@@ -202,7 +202,12 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
     report_at = xml_dict['Lieferdatum']['$']
 
     patient_reports_raw = _l(xml_dict.get('Menge_Patient', {}).get('Patient'))
-    for patient_report_raw in patient_reports_raw:
+    total = len(patient_reports_raw)
+    update_interval = max(1, total // 200)  # max. 200 Fortschritts-Updates gesamt
+    if progress_callback and total > 0:
+        progress_callback(0, total)
+
+    for i, patient_report_raw in enumerate(patient_reports_raw):
         vitalstatus = patient_report_raw['Patienten_Stammdaten']['Vitalstatus']
         todesursachen = _d(vitalstatus.get('Todesursachen'))
         death_causes = list(map(
@@ -526,6 +531,12 @@ def execute(uid: str, file_path: str, report_type: str = 'XML:oBDS_3.0.4_RKI'):
                 "kategorie":  "db_constraint",
                 "hinweis":    f"Datensatz konnte nicht gespeichert werden — möglicherweise ungültige Feldwerte: {str(db_err)[:150]}",
             })
+
+        if progress_callback and total > 0 and (i + 1) % update_interval == 0:
+            progress_callback(i + 1, total)
+
+    if progress_callback and total > 0:
+        progress_callback(total, total)
 
     session.close()
 

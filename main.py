@@ -58,7 +58,12 @@ async def process_report_import(uid: str):
             return
         
         report_import.status = ReportImportStatus.Pending
-        
+        session.commit()  # sofort sichtbar für den Polling-Endpoint
+
+        def update_progress(current: int, total: int):
+            report_import.additional_info = {"progress_current": current, "progress_total": total}
+            session.commit()
+
         warnings = []
         try:
             match report_import.type:
@@ -66,7 +71,8 @@ async def process_report_import(uid: str):
                     warnings = rki_report_processor.execute(
                         report_import.uid,
                         report_import.file,
-                        report_type=report_import.type.value
+                        report_type=report_import.type.value,
+                        progress_callback=update_progress
                     ) or []
                 case _:
                     logger.warning(f'report import with uid:{report_import.uid} and type:{report_import.type} is not supported')
